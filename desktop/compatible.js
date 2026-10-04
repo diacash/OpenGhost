@@ -6,10 +6,18 @@ function base(value) {
  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('Use an HTTP(S) base URL without credentials, query or fragment');
  return url.href.replace(/\/$/, '');
 }
+// OpenCode Go routes and caches by conversation: it rejects requests without a stable session id and asks clients to name themselves.
+const fallbackSession = require('crypto').randomUUID();
+function identity(config, version) {
+ const headers = { 'User-Agent': `OpenGhost/${version || '1.0'}` };
+ if (/(^|\.)opencode\.ai$/.test(new URL(config.baseUrl).hostname)) headers['x-opencode-session'] = String(config.session || fallbackSession);
+ return headers;
+}
 async function request(config, path, options = {}) {
- const headers = { 'Content-Type': 'application/json' };
+ const headers = { 'Content-Type': 'application/json', ...identity(config, options.version) };
  if (config.key) headers.Authorization = `Bearer ${config.key}`;
- const response = await fetch(`${base(config.baseUrl)}/${path}`, { ...options, headers });
+ const { version, ...init } = options;
+ const response = await fetch(`${base(config.baseUrl)}/${path}`, { ...init, headers });
  if (!response.ok) {
   let detail;
   try { detail = (await response.json()).error?.message; } catch {}
@@ -17,19 +25,19 @@ async function request(config, path, options = {}) {
  }
  return response;
 }
-async function models(config) {
- const data = (await (await request(config, 'models')).json()).data || [];
+async function models(config, { version } = {}) {
+ const data = (await (await request(config, 'models', { version })).json()).data || [];
  return data.filter(item => typeof item.id === 'string' && item.id).map(item => ({
   id: `compatible:${item.id}`, api: item.id, name: item.name || item.id, provider: 'compatible',
   context: Number(item.context_window) || 32768, vision: item.input_modalities?.includes('image') || false,
   efforts: ['none'], defaultEffort: 'none',
  }));
 }
-async function stream(config, { signal, onEvent = () => {} }) {
+async function stream(config, { signal, onEvent = () => {}, version }) {
  const messages = config.messages.map(({ native, cache, ...message }) => ({ ...message,
   content: !config.vision && Array.isArray(message.content) ? message.content.filter(part => part.type === 'text').map(part => part.text).join('\n') : message.content,
  }));
- const response = await request(config, 'chat/completions', { method: 'POST', signal, body: JSON.stringify({
+ const response = await request(config, 'chat/completions', { method: 'POST', signal, version, body: JSON.stringify({
   model: config.model, messages, stream: true, stream_options: { include_usage: true },
   ...(config.tools?.length ? { tools: config.tools } : {}),
   ...(config.maxTokens ? { max_tokens: config.maxTokens } : {}),
