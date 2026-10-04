@@ -1,5 +1,7 @@
 "use strict";
 
+const Go = require('./opencode-go');
+
 // Generic Chat Completions transport for LiteLLM and local model servers.
 function base(value) {
  const url = new URL(value);
@@ -34,7 +36,12 @@ function thinking(effort) {
 }
 async function models(config, { version } = {}) {
  const data = (await (await request(config, 'models', { version })).json()).data || [];
- return data.filter(item => typeof item.id === 'string' && item.id).map(item => ({
+ const go = Go.isHost(config.baseUrl);
+ return data.filter(item => typeof item.id === 'string' && item.id && !(go && Go.MODELS[item.id]?.other)).map(item => go && Go.MODELS[item.id] ? {
+  id: `compatible:${item.id}`, api: item.id, name: Go.MODELS[item.id].name, provider: 'compatible',
+  context: Go.MODELS[item.id].context || 32768, vision: !!Go.MODELS[item.id].vision,
+  efforts: Go.efforts(Go.MODELS[item.id]), defaultEffort: Go.fallback(Go.MODELS[item.id]),
+ } : ({
   id: `compatible:${item.id}`, api: item.id, name: item.name || item.id, provider: 'compatible',
   context: Number(item.context_window) || 32768, vision: item.input_modalities?.includes('image') || false,
   efforts: EFFORTS.slice(), defaultEffort: 'none',
@@ -50,7 +57,8 @@ async function stream(config, { signal, onEvent = () => {}, version }) {
   ...(config.maxTokens ? { max_tokens: config.maxTokens } : {}),
   ...extra,
  }) });
- const level = thinking(config.effort);
+ const known = Go.isHost(config.baseUrl) && Go.MODELS[config.model];
+ const level = known ? Go.thinking(known, config.effort) : thinking(config.effort);
  let response;
  try {
   response = await send(level);
