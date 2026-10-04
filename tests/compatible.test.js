@@ -17,7 +17,7 @@ test('discovers arbitrary models without authentication', async () => {
  const list = await models({ baseUrl: 'http://localhost:4000/v1' });
  assert.deepEqual(list.map(item => item.api), ['local-qwen', 'proxy-model']);
  assert.equal(list[0].context, 8192);
- assert.deepEqual(list[0].efforts, ['none']);
+ assert.deepEqual(list[0].efforts, ['none', 'low', 'medium', 'high']);
 });
 test('streams fragmented tool calls, text, reasoning and usage with a proxy key', async () => {
  let sent;

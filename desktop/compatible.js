@@ -25,23 +25,40 @@ async function request(config, path, options = {}) {
  }
  return response;
 }
+// Thinking is asked for the way most Chat Completions servers take it: a level in reasoning_effort, and thinking switched off for none.
+// The two are never sent together: some models refuse the pair.
+const EFFORTS = ['none', 'low', 'medium', 'high'];
+function thinking(effort) {
+ if (effort === 'none') return { thinking: { type: 'disabled' } };
+ return EFFORTS.includes(effort) ? { reasoning_effort: effort } : {};
+}
 async function models(config, { version } = {}) {
  const data = (await (await request(config, 'models', { version })).json()).data || [];
  return data.filter(item => typeof item.id === 'string' && item.id).map(item => ({
   id: `compatible:${item.id}`, api: item.id, name: item.name || item.id, provider: 'compatible',
   context: Number(item.context_window) || 32768, vision: item.input_modalities?.includes('image') || false,
-  efforts: ['none'], defaultEffort: 'none',
+  efforts: EFFORTS.slice(), defaultEffort: 'none',
  }));
 }
 async function stream(config, { signal, onEvent = () => {}, version }) {
  const messages = config.messages.map(({ native, cache, ...message }) => ({ ...message,
   content: !config.vision && Array.isArray(message.content) ? message.content.filter(part => part.type === 'text').map(part => part.text).join('\n') : message.content,
  }));
- const response = await request(config, 'chat/completions', { method: 'POST', signal, version, body: JSON.stringify({
+ const send = extra => request(config, 'chat/completions', { method: 'POST', signal, version, body: JSON.stringify({
   model: config.model, messages, stream: true, stream_options: { include_usage: true },
   ...(config.tools?.length ? { tools: config.tools } : {}),
   ...(config.maxTokens ? { max_tokens: config.maxTokens } : {}),
+  ...extra,
  }) });
+ const level = thinking(config.effort);
+ let response;
+ try {
+  response = await send(level);
+ } catch (error) {
+  // A server that doesn't know the thinking fields answers 400: the request goes again without them rather than failing the chat.
+  if (error.status !== 400 || !Object.keys(level).length) throw error;
+  response = await send({});
+ }
  const result = { content: '', reasoning: '', toolCalls: [], finishReason: null, usage: null };
  const calls = [];
  const reader = response.body.getReader(), decoder = new TextDecoder();
